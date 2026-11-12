@@ -19,26 +19,24 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: 3. Siapkan Flutter SDK Stabil
+      - name: 3. Siapkan Flutter SDK
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.3'
           channel: 'stable'
 
-      - name: 4. Generate Folder Android & Suntikkan Izin Share WA
+      - name: 4. Generate Proyek Android & Pasang Kode Share WA Native
         run: |
           cp pubspec.yaml pubspec_backup.yaml
           cp lib/main.dart main_backup.dart
           
-          flutter create --org com.gridpdf --project-name grid_pdf_app .
+          flutter create --org com.gridpdf --project-name grid_pdf_app --platforms=android .
           
           mv pubspec_backup.yaml pubspec.yaml
           mv main_backup.dart lib/main.dart
 
-      - name: 5. Pasang AndroidManifest.xml untuk Share WA
-        run: |
-          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+          python3 -c '
+          manifest = """<manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
               <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
               <application
@@ -75,16 +73,89 @@ jobs:
                       android:name="flutterEmbedding"
                       android:value="2" />
               </application>
-          </manifest>
-          EOF
-          sed -i 's/^[ \t]*//' android/app/src/main/AndroidManifest.xml
+          </manifest>"""
+          with open("android/app/src/main/AndroidManifest.xml", "w") as f:
+              f.write(manifest)
 
-      - name: 6. Unduh Library & Compile menjadi APK
+          kotlin_code = """package com.gridpdf.grid_pdf_app
+
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Bundle
+          import io.flutter.embedding.android.FlutterActivity
+          import io.flutter.embedding.engine.FlutterEngine
+          import io.flutter.plugin.common.MethodChannel
+          import java.io.File
+          import java.io.FileOutputStream
+
+          class MainActivity: FlutterActivity() {
+              private val CHANNEL = "com.gridpdf/share"
+              private var sharedPaths = mutableListOf<String>()
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  handleSendIntent(intent)
+              }
+
+              override fun onNewIntent(intent: Intent) {
+                  super.onNewIntent(intent)
+                  handleSendIntent(intent)
+              }
+
+              override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+                  super.configureFlutterEngine(flutterEngine)
+                  MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+                      if (call.method == "getSharedImages") {
+                          val copy = ArrayList(sharedPaths)
+                          sharedPaths.clear()
+                          result.success(copy)
+                      } else {
+                          result.notImplemented()
+                      }
+                  }
+              }
+
+              private fun handleSendIntent(intent: Intent?) {
+                  if (intent == null) return
+                  val action = intent.action
+                  val type = intent.type
+                  if (type?.startsWith("image/") == true) {
+                      if (Intent.ACTION_SEND == action) {
+                          val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                          uri?.let { copyUriToTempFile(it)?.let { path -> sharedPaths.add(path) } }
+                      } else if (Intent.ACTION_SEND_MULTIPLE == action) {
+                          val uris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                          uris?.forEach { uri ->
+                              copyUriToTempFile(uri)?.let { path -> sharedPaths.add(path) }
+                          }
+                      }
+                  }
+              }
+
+              private fun copyUriToTempFile(uri: Uri): String? {
+                  return try {
+                      val inputStream = contentResolver.openInputStream(uri) ?: return null
+                      val tempFile = File(cacheDir, "shared_" + System.currentTimeMillis() + "_" + (1000..9999).random() + ".jpg")
+                      val outputStream = FileOutputStream(tempFile)
+                      inputStream.copyTo(outputStream)
+                      inputStream.close()
+                      outputStream.close()
+                      tempFile.absolutePath
+                  } catch (e: Exception) {
+                      null
+                  }
+              }
+          }"""
+          with open("android/app/src/main/kotlin/com/gridpdf/grid_pdf_app/MainActivity.kt", "w") as f:
+              f.write(kotlin_code)
+          '
+
+      - name: 5. Unduh Library & Compile menjadi APK
         run: |
           flutter pub get
           flutter build apk --release --no-tree-shake-icons
 
-      - name: 7. Siapkan File APK untuk Diunduh
+      - name: 6. Siapkan File APK untuk Diunduh
         uses: actions/upload-artifact@v4
         with:
           name: Aplikasi-Grid-3x3-PDF
