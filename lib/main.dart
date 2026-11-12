@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -36,54 +36,52 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
-  StreamSubscription? _intentDataStreamSubscription;
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  static const platform = MethodChannel('com.gridpdf/share');
   final List<File> _images = [];
   bool _isGenerating = false;
-  bool _cropSquare = true; // true = Cover/Penuh kotak, false = Fit/Gambar utuh
+  bool _cropSquare = true;
 
   @override
   void initState() {
     super.initState();
-    _initSharingListener();
-  }
-
-  void _initSharingListener() {
-    // 1. Menangkap gambar saat aplikasi sudah berjalan di background
-    _intentDataStreamSubscription = ReceiveSharingIntent.instance
-        .getMediaStream()
-        .listen((List<SharedMediaFile> value) {
-      if (value.isNotEmpty) {
-        setState(() {
-          _images.clear();
-          _images.addAll(value.map((f) => File(f.path)));
-        });
-      }
-    }, onError: (err) {
-      debugPrint("Error receiving intent: $err");
-    });
-
-    // 2. Menangkap gambar saat aplikasi baru dibuka dari menu Share WA
-    ReceiveSharingIntent.instance
-        .getInitialMedia()
-        .then((List<SharedMediaFile> value) {
-      if (value.isNotEmpty) {
-        setState(() {
-          _images.clear();
-          _images.addAll(value.map((f) => File(f.path)));
-        });
-        ReceiveSharingIntent.instance.reset();
-      }
-    });
+    WidgetsBinding.instance.addObserver(this);
+    _checkSharedImages();
   }
 
   @override
   void dispose() {
-    _intentDataStreamSubscription?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
-  // Fungsi pilih gambar manual jika dibuka langsung tanpa lewat WA
+  // Otomatis cek kiriman foto baru saat aplikasi kembali dibuka dari WA
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkSharedImages();
+    }
+  }
+
+  Future<void> _checkSharedImages() async {
+    try {
+      final List<dynamic>? sharedPaths =
+          await platform.invokeMethod<List<dynamic>>('getSharedImages');
+      if (sharedPaths != null && sharedPaths.isNotEmpty) {
+        setState(() {
+          _images.clear();
+          for (var p in sharedPaths) {
+            if (p is String && p.isNotEmpty) {
+              _images.add(File(p));
+            }
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint("Error membaca share intent: $e");
+    }
+  }
+
   Future<void> _pickImagesManually() async {
     final ImagePicker picker = ImagePicker();
     final List<XFile> picked = await picker.pickMultiImage();
@@ -94,7 +92,6 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // Mesin Pembuat PDF Grid 3x3 Otomatis Pindah Halaman
   Future<void> _generateAndSharePdf() async {
     if (_images.isEmpty) return;
 
@@ -102,7 +99,7 @@ class _HomePageState extends State<HomePage> {
 
     try {
       final pdf = pw.Document();
-      const int itemsPerPage = 9; // Grid 3x3 = 9 foto per halaman
+      const int itemsPerPage = 9;
       final int totalPages = (_images.length / itemsPerPage).ceil();
 
       for (int pageIndex = 0; pageIndex < totalPages; pageIndex++) {
@@ -113,7 +110,6 @@ class _HomePageState extends State<HomePage> {
 
         final List<File> pageImages = _images.sublist(startIndex, endIndex);
 
-        // Baca byte gambar untuk halaman ini
         final List<pw.MemoryImage> pdfImages = [];
         for (var imgFile in pageImages) {
           final bytes = await imgFile.readAsBytes();
@@ -150,7 +146,6 @@ class _HomePageState extends State<HomePage> {
                             ),
                           );
                         } else {
-                          // Kotak kosong jika jumlah foto di halaman terakhir tidak genap 9
                           return pw.Expanded(
                             child: pw.Container(
                               margin: const pw.EdgeInsets.all(4),
@@ -167,7 +162,6 @@ class _HomePageState extends State<HomePage> {
         );
       }
 
-      // Simpan ke folder sementara HP
       final outputDir = await getTemporaryDirectory();
       final String timestamp = DateTime.now().millisecondsSinceEpoch.toString();
       final File pdfFile = File(
@@ -176,7 +170,6 @@ class _HomePageState extends State<HomePage> {
 
       setState(() => _isGenerating = false);
 
-      // Langsung buka menu Share Android untuk kirim balik ke WhatsApp
       await Share.shareXFiles(
         [XFile(pdfFile.path)],
         text: 'PDF Grid 3x3 (${_images.length} Foto - $totalPages Halaman)',
@@ -209,7 +202,6 @@ class _HomePageState extends State<HomePage> {
       ),
       body: Column(
         children: [
-          // Bar Pengaturan & Info Halaman
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             color: Colors.teal.withOpacity(0.1),
@@ -232,8 +224,6 @@ class _HomePageState extends State<HomePage> {
               ],
             ),
           ),
-
-          // Preview Grid 3x3 di Layar HP
           Expanded(
             child: _images.isEmpty
                 ? Center(
@@ -246,7 +236,7 @@ class _HomePageState extends State<HomePage> {
                               size: 72, color: Colors.grey),
                           const SizedBox(height: 16),
                           const Text(
-                            'Belum ada foto.\n\nPilih banyak foto di WhatsApp lalu klik "Bagikan" -> pilih "Grid 3x3 PDF", atau klik tombol Tambah Foto di bawah.',
+                            'Belum ada foto.\n\nPilih banyak foto di WhatsApp lalu klik "Bagikan" -> pilih "Grid 3x3 PDF", atau klik tombol di bawah.',
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.grey),
                           ),
@@ -284,7 +274,6 @@ class _HomePageState extends State<HomePage> {
                               fit: _cropSquare ? BoxFit.cover : BoxFit.contain,
                             ),
                           ),
-                          // Nomor Urut & Info Halaman
                           Positioned(
                             top: 4,
                             left: 4,
@@ -302,7 +291,6 @@ class _HomePageState extends State<HomePage> {
                               ),
                             ),
                           ),
-                          // Tombol Hapus 1 Foto
                           Positioned(
                             top: 4,
                             right: 4,
