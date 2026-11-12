@@ -9,7 +9,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  receive_sharing_intent: ^1.8.1
   image_picker: ^1.1.2
   pdf: ^3.11.1
   path_provider: ^2.1.4
