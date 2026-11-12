@@ -1,0 +1,92 @@
+name: Build APK Grid 3x3 PDF
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Memungkinkan tombol klik manual di tab Actions
+
+jobs:
+  build_apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Ambil Kode dari Repository
+        uses: actions/checkout@v4
+
+      - name: 2. Siapkan Java 17 (Wajib untuk Android Gradle)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: 3. Siapkan Flutter SDK Terbaru
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: 4. Generate Folder Android & Suntikkan Izin Share WA
+        run: |
+          # Simpan file buatan kita sementara
+          cp pubspec.yaml pubspec_backup.yaml
+          cp lib/main.dart main_backup.dart
+          
+          # Buat struktur lengkap proyek Android secara otomatis
+          flutter create --org com.gridpdf --project-name grid_pdf_app .
+          
+          # Kembalikan file kode dan pubspec kita
+          mv pubspec_backup.yaml pubspec.yaml
+          mv main_backup.dart lib/main.dart
+          
+          # Timpa AndroidManifest.xml agar terdaftar di menu Share WhatsApp
+          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+              <application
+                  android:label="Grid 3x3 PDF"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <meta-data
+                        android:name="io.flutter.embedding.android.NormalTheme"
+                        android:resource="@style/NormalTheme"
+                        />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.SEND" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <data android:mimeType="image/*" />
+                      </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.SEND_MULTIPLE" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <data android:mimeType="image/*" />
+                      </intent-filter>
+                  </activity>
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+              </application>
+          </manifest>
+          EOF
+
+      - name: 5. Unduh Library & Compile menjadi APK
+        run: |
+          flutter pub get
+          flutter build apk --release --no-tree-shake-icons
+
+      - name: 6. Siapkan File APK untuk Diunduh
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aplikasi-Grid-3x3-PDF
+          path: build/app/outputs/flutter-apk/app-release.apk
